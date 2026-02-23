@@ -1,3 +1,4 @@
+# LOA STATIC ROSTER INFO SCRIPT
 You will need the following to run this script
   1. Python..this works on 3.13 but should work on earlier versions as well
   2. pip, the package manager for python, usually default installed with Python
