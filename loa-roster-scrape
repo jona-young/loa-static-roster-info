@@ -1,0 +1,125 @@
+#!/Library/Frameworks/Python.framework/Versions/3.13/bin/python3
+import time
+import gspread
+from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
+from google.oauth2.service_account import Credentials
+
+# This script web scrapes the roster information for a group of players and writes it to a Google Sheet
+
+# [REQUIRED] TO ADD THE FILE NAME AND SHEET NAME TO WRITE DATA
+googleFileName = ""
+googleSheetName = ""
+
+# [REQUIRED] Ideally staticPlayers is pulled from Google Sheets, but for now it's hardcoded
+staticPlayers = []
+
+
+# The scope of the google service account would directly access google sheets and drive
+scopes = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
+
+chromeOptions = Options()
+chromeOptions.add_argument("--headless")
+
+staticRosters = []
+
+# The uwuowo URL for the roster page, *may change in the future
+def getRosterURL(playerName):
+    return f"https://lostark.bible/character/NA/{playerName}/roster"
+
+# Web scrapes the roster information for the specific players
+def getRosterInfo():
+    # Runs in headless mode (no visible browser, it's essentially hidden)
+    driver = webdriver.Chrome(options=chromeOptions)
+
+    for player in staticPlayers:
+        time.sleep(1)  # Sleep for 1 seconds before each request to avoid overwhelming the server
+
+        singleRoster = []
+        playerURL = getRosterURL(player)
+
+        driver.get(playerURL)
+
+        # Wait until the roster grid is loaded on page
+        WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located((By.XPATH, "/html/body/div/div[1]/div/main/div[1]/div/div[1]/div[2]/h1"))
+        )
+        
+        # Grabs the specific roster grid element
+        rosterTable = driver.find_element(By.XPATH, '/html/body/div/div[1]/div/main/main/div')
+
+        # Parse the roster table with beautiful soup to extract data
+        rosterTable = BeautifulSoup(rosterTable.get_attribute("outerHTML"), "html.parser")
+
+        # The data for each character we need is stored in "a" tags (links)
+        for character in rosterTable.find_all("a"):
+            character_container = character.find("div")
+            if not character_container:
+                continue
+            
+            character_card = character_container.find("div")
+            if not character_card:
+                continue
+
+            # Get the immediate text (e.g. "Rathofdemise") - excludes child element text
+            name = character_card.find(string=True, recursive=False).strip()
+
+            # Get the span values which are ilvl and combat score
+            spans = character_card.find_all("span")
+            ilvl = spans[0].get_text(strip=True) if len(spans) > 0 else None      # "1745"
+            combat_score  = spans[-1].get_text(strip=True) if len(spans) > 1 else None    # "≈4787.24"
+
+            # Take the first  6 characters, ignore the rest for simplicity
+            # It seems uwuowo orders them highest to lowest ilvl
+            if len(singleRoster) < 6:
+                singleRoster.append({
+                    "name": name,
+                    "ilvl": ilvl,
+                    "combat_score": combat_score
+                })
+
+        # adds a player's roster to the group of static's rosters
+        staticRosters.append({"name": player, "roster": singleRoster})
+        print("Finished scraping roster for player:", player)
+
+    return staticRosters
+
+# Web scrape roster information
+getRosterInfo()
+
+# Connect to Google Sheets
+creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
+client = gspread.authorize(creds)
+
+# Access the specific sheet
+sheet = client.open(googleFileName).worksheet(googleSheetName)
+
+# Build the data rows to add to the sheet
+headers = ["Main Character", "Character Name", "Item Level", "Combat Score"]
+rows = [headers]
+
+for group in staticRosters:
+    main = group["name"]
+    for i, member in enumerate(group["roster"]):
+        rows.append([
+            main if i == 0 else "",          # Only show main char on first row
+            member["name"],
+            float(member["ilvl"]),
+            float(member["combat_score"].replace("≈", ""))
+        ])
+
+# --- Write to sheet ---
+sheet.clear()
+sheet.update(rows, "A1")
+
+# --- Optional: Bold the header row ---
+sheet.format("A1:D1", {"textFormat": {"bold": True}})
+
+print("Done! Data written to Google Sheets.")
